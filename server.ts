@@ -13,34 +13,93 @@ const io = new Server(server, {
 
 const PORT = 3001;
 
-let roomParticipants: string[] = [];
+interface RoomParticipant {
+  id: string;
+  socket: Socket;
+}
+
+let roomParticipants: RoomParticipant[] = [];
 
 io.on("connection", (socket: Socket) => {
-  console.log("New client connected");
+  console.log("New client connected", socket.id);
 
-  socket.on("join", () => {
-    roomParticipants.push(socket.id);
-    if (roomParticipants.length === 2) {
-      io.emit("start_call");
+  socket.on("join_call", () => {
+    const newParticipant = { id: socket.id, socket };
+    roomParticipants.push(newParticipant);
+
+    // Notify the new participant about existing participants
+    roomParticipants.forEach((participant) => {
+      if (participant.id !== socket.id) {
+        socket.emit("user_joined", participant.id);
+      }
+    });
+
+    // Notify existing participants about the new participant
+    socket.broadcast.emit("user_joined", socket.id);
+
+    console.log(
+      `${socket.id} joined the call. Total participants: ${roomParticipants.length}`
+    );
+  });
+
+  socket.on(
+    "webrtc_offer",
+    (data: { peerId: string; offer: RTCSessionDescriptionInit }) => {
+      const { peerId, offer } = data;
+      const targetParticipant = roomParticipants.find((p) => p.id === peerId);
+      if (targetParticipant) {
+        targetParticipant.socket.emit("webrtc_offer", {
+          peerId: socket.id,
+          offer,
+        });
+      }
     }
-  });
+  );
 
-  socket.on("webrtc_offer", (offer: RTCSessionDescriptionInit) => {
-    socket.broadcast.emit("webrtc_offer", offer);
-  });
+  socket.on(
+    "webrtc_answer",
+    (data: { peerId: string; answer: RTCSessionDescriptionInit }) => {
+      const { peerId, answer } = data;
+      const targetParticipant = roomParticipants.find((p) => p.id === peerId);
+      if (targetParticipant) {
+        targetParticipant.socket.emit("webrtc_answer", {
+          peerId: socket.id,
+          answer,
+        });
+      }
+    }
+  );
 
-  socket.on("webrtc_answer", (answer: RTCSessionDescriptionInit) => {
-    socket.broadcast.emit("webrtc_answer", answer);
-  });
+  socket.on(
+    "webrtc_ice_candidate",
+    (data: { peerId: string; candidate: RTCIceCandidate }) => {
+      const { peerId, candidate } = data;
+      const targetParticipant = roomParticipants.find((p) => p.id === peerId);
+      if (targetParticipant) {
+        targetParticipant.socket.emit("webrtc_ice_candidate", {
+          peerId: socket.id,
+          candidate,
+        });
+      }
+    }
+  );
 
-  socket.on("webrtc_ice_candidate", (candidate: RTCIceCandidate) => {
-    socket.broadcast.emit("webrtc_ice_candidate", candidate);
+  socket.on("leave_call", () => {
+    removeParticipant(socket.id);
   });
 
   socket.on("disconnect", () => {
-    console.log("Client disconnected");
-    roomParticipants = roomParticipants.filter((id) => id !== socket.id);
+    console.log("Client disconnected", socket.id);
+    removeParticipant(socket.id);
   });
 });
+
+function removeParticipant(id: string) {
+  roomParticipants = roomParticipants.filter((p) => p.id !== id);
+  io.emit("user_left", id);
+  console.log(
+    `${id} left the call. Total participants: ${roomParticipants.length}`
+  );
+}
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
